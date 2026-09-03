@@ -1,0 +1,120 @@
+---
+title: "Análisis de Métricas DevOps"
+author: "Andrés"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: cosmo
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# 1. Carga y Limpieza de Datos
+
+```{r carga_limpieza}
+library(tidyverse)
+library(moments)
+
+df <- read_csv("devops_metrics.csv")
+
+df_clean <- df %>%
+  drop_na() %>% 
+  mutate(
+    priority = factor(priority, levels = c("baja", "media", "alta", "crítica"), ordered = TRUE),
+    team = as.factor(team),
+    module = as.factor(module),
+    deploy_status = as.factor(deploy_status)
+  )
+
+glimpse(df_clean)
+```
+
+# 2. Estadística Descriptiva Univariada
+
+```{r descriptiva}
+df_clean %>%
+  summarise(
+    across(
+      c(build_time_min, deploy_time_min, test_coverage_pct, 
+        ticket_resolution_h, commit_size_loc, num_bugs),
+      list(
+        media     = ~ round(mean(.x), 2),
+        mediana   = ~ round(median(.x), 2),
+        sd        = ~ round(sd(.x), 2),
+        iqr       = ~ round(IQR(.x), 2),
+        cv        = ~ round(sd(.x) / mean(.x), 2),
+        asimetria = ~ round(skewness(.x), 2)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  ) %>%
+  pivot_longer(cols = everything(), names_to = c("variable", "medida"), names_pattern = "(.*)_(.*)") %>%
+  pivot_wider(names_from = medida, values_from = value)
+```
+
+# 3. Tablas de Frecuencia (Sturges)
+
+```{r frecuencias}
+N <- nrow(df_clean)
+k <- ceiling(1 + 3.322 * log10(N))
+
+df_clean %>%
+  mutate(clase = cut(build_time_min, breaks = k, include.lowest = TRUE)) %>%
+  count(clase, name = "fa") %>%
+  mutate(
+    fr = round(fa / sum(fa), 4),
+    fr_pct = round(fr * 100, 2),
+    fac = cumsum(fa)
+  )
+```
+
+# 4. Comparación por Grupos y Correlaciones
+
+```{r grupos}
+# Resumen por equipo
+df_clean %>%
+  group_by(team) %>%
+  summarise(
+    eventos = n(),
+    mediana_build = round(median(build_time_min), 2),
+    promedio_bugs = round(mean(num_bugs), 2),
+    pct_fallos = round(mean(deploy_status == "failed") * 100, 2)
+  )
+
+# Matriz de Correlación
+df_clean %>%
+  select(where(is.numeric)) %>%
+  cor(use = "complete.obs") %>%
+  round(2)
+```
+
+# 5. Visualizaciones Clave
+
+```{r graficos, fig.width=8, fig.height=5}
+theme_set(theme_minimal())
+
+# Histograma
+ggplot(df_clean, aes(x = build_time_min)) +
+  geom_histogram(bins = k, fill = "#0284c7", color = "#ffffff") +
+  labs(title = "Distribución del Tiempo de Build", x = "Minutos", y = "Frecuencia")
+
+# Boxplot
+ggplot(df_clean, aes(x = team, y = ticket_resolution_h, fill = team)) +
+  geom_boxplot(show.legend = FALSE) +
+  labs(title = "Resolución de Tickets por Equipo", x = "Equipo", y = "Horas")
+
+# Barras
+ggplot(df_clean, aes(x = priority, fill = deploy_status)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Estado de Despliegue según Prioridad", x = "Prioridad", y = "Cantidad")
+
+# Dispersión
+ggplot(df_clean, aes(x = commit_size_loc, y = num_bugs)) +
+  geom_jitter(alpha = 0.3, color = "#2563eb") +
+  geom_smooth(method = "lm", color = "#dc2626") +
+  labs(title = "Tamaño de Commit vs Bugs", x = "Líneas de Código", y = "Bugs")
+```
